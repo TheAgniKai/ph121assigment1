@@ -1,6 +1,12 @@
 """Utility modules for PH121 numerical integration assignment."""
 
 from .integrators import forward_euler, runge_kutta4, velocity_verlet
+from .chaos import (
+    LyapunovEstimate,
+    estimate_lorenz_maximal_lyapunov,
+    format_estimates,
+    lorenz63_derivative,
+)
 from .mercury import (
     PrecessionEstimate,
     estimate_precession,
@@ -19,6 +25,10 @@ __all__ = [
     "forward_euler",
     "runge_kutta4",
     "velocity_verlet",
+    "LyapunovEstimate",
+    "estimate_lorenz_maximal_lyapunov",
+    "format_estimates",
+    "lorenz63_derivative",
     "PrecessionEstimate",
     "estimate_precession",
     "integrate_mercury_orbit",
