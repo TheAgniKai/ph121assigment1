@@ -2,7 +2,9 @@
 
 from .integrators import forward_euler, runge_kutta4, velocity_verlet
 from .chaos import (
+    BoxCountingEstimate,
     LyapunovEstimate,
+    estimate_lorenz_box_counting_dimension,
     estimate_lorenz_maximal_lyapunov,
     format_estimates,
     lorenz63_derivative,
@@ -25,7 +27,9 @@ __all__ = [
     "forward_euler",
     "runge_kutta4",
     "velocity_verlet",
+    "BoxCountingEstimate",
     "LyapunovEstimate",
+    "estimate_lorenz_box_counting_dimension",
     "estimate_lorenz_maximal_lyapunov",
     "format_estimates",
     "lorenz63_derivative",

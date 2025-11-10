@@ -15,7 +15,7 @@ installations such as the autograder environment.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import log, sqrt
+from math import ceil, floor, log, sqrt
 from random import Random
 from statistics import mean, stdev
 from typing import Iterable, List, Sequence, Tuple
@@ -114,6 +114,14 @@ class LyapunovEstimate:
     warmup_result: IntegrationResult
     base_result: IntegrationResult
     perturbed_result: IntegrationResult
+
+
+@dataclass(frozen=True)
+class BoxCountingEstimate:
+    """Summary of the box-counting statistics for a single ``ϵ`` value."""
+
+    epsilon: float
+    box_count: int
 
 
 def _filter_growth_region(
@@ -267,6 +275,139 @@ def format_estimates(estimates: Sequence[LyapunovEstimate]) -> str:
     for index, estimate in enumerate(estimates, start=1):
         lines.append(f"{index:>6d}  {estimate.exponent:8.5f}")
     return "\n".join(lines)
+
+
+def _bounding_box(states: Sequence[Sequence[float]]) -> Tuple[Tuple[float, ...], Tuple[float, ...]]:
+    """Return the minima and maxima across ``states`` for each coordinate."""
+
+    if not states:
+        raise ValueError("At least one state is required to compute a bounding box.")
+
+    dimensions = len(states[0])
+    minima = [float("inf")] * dimensions
+    maxima = [float("-inf")] * dimensions
+
+    for state in states:
+        if len(state) != dimensions:
+            raise ValueError("All states must have the same dimensionality.")
+        for idx, value in enumerate(state):
+            if value < minima[idx]:
+                minima[idx] = value
+            if value > maxima[idx]:
+                maxima[idx] = value
+
+    # Expand the bounds by a tiny factor to protect against round-off spilling
+    # points exactly on the upper boundary into an additional box when scaled.
+    padding = 1.0e-9
+    for idx in range(dimensions):
+        span = maxima[idx] - minima[idx]
+        if span == 0.0:
+            span = 1.0
+        offset = padding * span
+        minima[idx] -= offset
+        maxima[idx] += offset
+
+    return tuple(minima), tuple(maxima)
+
+
+def _count_visited_boxes(
+    states: Sequence[Sequence[float]],
+    epsilon: float,
+    minima: Sequence[float],
+    maxima: Sequence[float],
+) -> int:
+    """Return the number of ``ϵ``-boxes visited by ``states``."""
+
+    if epsilon <= 0.0:
+        raise ValueError("epsilon must be positive when counting boxes.")
+
+    dimensions = len(minima)
+    bins_per_axis = []
+    for min_value, max_value in zip(minima, maxima):
+        span = max_value - min_value
+        if span <= 0.0:
+            bins_per_axis.append(1)
+        else:
+            bins_per_axis.append(int(ceil(span / epsilon)) + 1)
+
+    visited = set()
+    for state in states:
+        indices = []
+        for axis, value in enumerate(state):
+            min_value = minima[axis]
+            bins = bins_per_axis[axis]
+            relative = (value - min_value) / epsilon
+            index = floor(relative + 1.0e-12)
+            if index < 0:
+                index = 0
+            elif index >= bins:
+                index = bins - 1
+            indices.append(index)
+        visited.add(tuple(indices))
+
+    return len(visited)
+
+
+def estimate_lorenz_box_counting_dimension(
+    epsilons: Sequence[float],
+    *,
+    warmup_time: float = 20.0,
+    sample_time: float = 60.0,
+    step: float = 0.01,
+    initial_state: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+) -> Tuple[List[BoxCountingEstimate], float]:
+    """Estimate the box-counting dimension ``D₀`` of the Lorenz attractor.
+
+    The routine follows the description given in the assignment text.  It first
+    integrates the Lorenz system for ``warmup_time`` to drive the initial
+    condition onto the attractor.  A subsequent integration of duration
+    ``sample_time`` traces out a trajectory whose visited ``ϵ``-boxes are
+    counted for each ``ϵ`` in ``epsilons``.
+
+    Parameters
+    ----------
+    epsilons:
+        Iterable of box edge lengths to analyse.  The collection must contain at
+        least two positive values to allow a linear fit of ``n(ϵ)`` against
+        ``e(ϵ)``.
+    warmup_time:
+        Integration time used to approach the attractor.
+    sample_time:
+        Duration of the integration used for the box counting.
+    step:
+        Integration step size ``h`` used for both warmup and sampling runs.
+    initial_state:
+        Starting point of the integration.
+
+    Returns
+    -------
+    estimates, dimension:
+        The individual :class:`BoxCountingEstimate` objects for each ``ϵ`` and
+        the slope obtained from a least-squares fit of
+        ``n(ϵ) = ln N(ϵ)`` versus ``e(ϵ) = |ln ϵ|``.
+    """
+
+    epsilons = list(epsilons)
+    if len(epsilons) < 2:
+        raise ValueError("At least two epsilon values are required to fit a slope.")
+    if any(epsilon <= 0.0 for epsilon in epsilons):
+        raise ValueError("All epsilon values must be positive.")
+
+    warmup = _integrate_lorenz(initial_state, t_end=warmup_time, step=step)
+    sample = _integrate_lorenz(warmup.states[-1], t_end=sample_time, step=step)
+
+    minima, maxima = _bounding_box(sample.states)
+
+    sorted_epsilons = sorted(epsilons)
+    estimates: List[BoxCountingEstimate] = []
+    for epsilon in sorted_epsilons:
+        count = _count_visited_boxes(sample.states, epsilon, minima, maxima)
+        estimates.append(BoxCountingEstimate(epsilon=epsilon, box_count=count))
+
+    regression_points = [(abs(log(estimate.epsilon)), log(estimate.box_count)) for estimate in estimates]
+    dimension = _linear_regression_slope(regression_points)
+
+    return estimates, dimension
 
 
 def main() -> None:  # pragma: no cover - convenience entry point for manual runs
