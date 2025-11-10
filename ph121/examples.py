@@ -1,17 +1,17 @@
-"""Example problems solved with the :mod:`ph121.integrators` helpers."""
+"""Small harmonic oscillator demo for the integration helpers."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from math import cos, sin, tau
-from typing import Tuple
+from typing import List, Tuple
 
 from .integrators import IntegrationResult, runge_kutta4
 
 
-@dataclass(frozen=True)
+@dataclass
 class OscillatorAnalysis:
-    """Summary of the harmonic oscillator integration accuracy."""
+    """Hold the integration output and simple error checks."""
 
     result: IntegrationResult
     max_position_error: float
@@ -19,50 +19,35 @@ class OscillatorAnalysis:
 
 
 def harmonic_oscillator_derivative(_: float, state: Tuple[float, float]) -> Tuple[float, float]:
-    """Time derivative for a unit-frequency harmonic oscillator."""
-
     position, velocity = state
     return velocity, -position
 
 
 def harmonic_oscillator_exact(t: float) -> Tuple[float, float]:
-    """Analytic solution with initial conditions x(0)=1, v(0)=0."""
-
     return cos(t), -sin(t)
 
 
 def integrate_harmonic_oscillator(*, periods: float = 1.0, step: float = 0.01) -> OscillatorAnalysis:
-    """Integrate a harmonic oscillator and report the maximum error.
-
-    Parameters
-    ----------
-    periods:
-        Number of oscillation periods :math:`2\pi` to evolve for.
-    step:
-        Integration time step.
-    """
-
-    t_end = periods * tau
+    total_time = periods * tau
     result = runge_kutta4(
         harmonic_oscillator_derivative,
         (1.0, 0.0),
         t0=0.0,
-        t_end=t_end,
+        t_end=total_time,
         step=step,
     )
-
-    max_pos_err = 0.0
-    max_vel_err = 0.0
-    for t, (position, velocity) in zip(result.times, result.states):
-        exact_position, exact_velocity = harmonic_oscillator_exact(t)
-        max_pos_err = max(max_pos_err, abs(position - exact_position))
-        max_vel_err = max(max_vel_err, abs(velocity - exact_velocity))
-
-    return OscillatorAnalysis(
-        result=result,
-        max_position_error=max_pos_err,
-        max_velocity_error=max_vel_err,
-    )
+    max_pos = 0.0
+    max_vel = 0.0
+    for idx, time in enumerate(result.times):
+        state = result.states[idx]
+        exact_state = harmonic_oscillator_exact(time)
+        pos_error = abs(state[0] - exact_state[0])
+        vel_error = abs(state[1] - exact_state[1])
+        if pos_error > max_pos:
+            max_pos = pos_error
+        if vel_error > max_vel:
+            max_vel = vel_error
+    return OscillatorAnalysis(result=result, max_position_error=max_pos, max_velocity_error=max_vel)
 
 
 def _format_float(value: float) -> str:
@@ -70,18 +55,17 @@ def _format_float(value: float) -> str:
 
 
 def main(periods: float = 1.0, step: float = 0.01) -> None:
-    """Integrate and print the harmonic oscillator accuracy summary."""
-
     analysis = integrate_harmonic_oscillator(periods=periods, step=step)
     final_time = analysis.result.times[-1]
     final_state = analysis.result.states[-1]
-    print(
-        "Integrated harmonic oscillator for",
-        _format_float(final_time),
-        "seconds using dt =",
-        _format_float(step),
-    )
-    print("Final state (x, v) =", tuple(_format_float(v) for v in final_state))
+    text: List[str] = []
+    text.append("Integrated harmonic oscillator for")
+    text.append(_format_float(final_time))
+    text.append("seconds using dt =")
+    text.append(_format_float(step))
+    print(" ".join(text))
+    pair = tuple(_format_float(value) for value in final_state)
+    print("Final state (x, v) =", pair)
     print(
         "Maximum errors: Δx =",
         _format_float(analysis.max_position_error),
@@ -90,5 +74,5 @@ def main(periods: float = 1.0, step: float = 0.01) -> None:
     )
 
 
-if __name__ == "__main__":  # pragma: no cover - simple demonstration helper
+if __name__ == "__main__":  # pragma: no cover - helper script
     main()

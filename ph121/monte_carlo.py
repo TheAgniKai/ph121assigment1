@@ -1,4 +1,4 @@
-"""Monte Carlo integration helpers used in the PH121 assignment."""
+"""Basic Monte Carlo helpers with minimal dependencies."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ Point = Tuple[Number, ...]
 
 @dataclass
 class MonteCarloResult:
-    """Result of a Monte Carlo integration run."""
+    """Store value, error, and sample count."""
 
     value: float
     error: float
@@ -27,45 +27,33 @@ def monte_carlo_integrate(
     *,
     rng: random.Random | None = None,
 ) -> MonteCarloResult:
-    """Estimate an integral using uniform Monte Carlo sampling.
-
-    Parameters
-    ----------
-    func:
-        Callable to evaluate. Receives a tuple containing the coordinates of a random
-        sample inside the integration hyper-rectangle.
-    bounds:
-        Sequence of ``(min, max)`` tuples specifying the integration range in each
-        dimension.
-    samples:
-        Number of random points used for the estimate. Must be positive.
-    rng:
-        Optional :class:`random.Random` instance controlling the pseudo-random stream.
-
-    Returns
-    -------
-    MonteCarloResult
-        Estimated integral value and its one-sigma statistical uncertainty.
-    """
+    """Uniform Monte Carlo estimate."""
 
     if samples <= 0:
-        raise ValueError("samples must be a positive integer")
+        raise ValueError("samples must be positive")
     if rng is None:
         rng = random.Random()
-
-    widths = [upper - lower for lower, upper in bounds]
-    if any(width <= 0 for width in widths):
-        raise ValueError("bounds must have upper > lower in every dimension")
-
-    volume = math.prod(widths)
-    evaluations: List[float] = []
-
+    widths: List[float] = []
+    for lower, upper in bounds:
+        width = upper - lower
+        if width <= 0.0:
+            raise ValueError("bounds need upper > lower")
+        widths.append(width)
+    volume = 1.0
+    for width in widths:
+        volume *= width
+    values: List[float] = []
     for _ in range(samples):
-        coords = tuple(lower + rng.random() * width for (lower, _), width in zip(bounds, widths))
-        evaluations.append(func(coords))
-
-    mean = sum(evaluations) / samples
-    variance = sum((value - mean) ** 2 for value in evaluations) / (samples - 1 if samples > 1 else 1)
+        coords_list: List[float] = []
+        for (lower, _), width in zip(bounds, widths):
+            coords_list.append(lower + rng.random() * width)
+        point = tuple(coords_list)
+        values.append(func(point))
+    mean = sum(values) / samples
+    if samples > 1:
+        variance = sum((value - mean) ** 2 for value in values) / (samples - 1)
+    else:
+        variance = 0.0
     error = math.sqrt(variance / samples)
     return MonteCarloResult(value=volume * mean, error=volume * error, samples=samples)
 
@@ -78,26 +66,21 @@ def importance_sampling(
     *,
     rng: random.Random | None = None,
 ) -> MonteCarloResult:
-    """Estimate an integral using importance sampling.
-
-    The sampler should draw points according to the proposal distribution, and the
-    ``weight`` callable must return ``1 / g(x)`` where ``g`` is the probability density
-    associated with the sampler.  The routine then averages ``f(x) / g(x)`` and returns
-    the corresponding estimate of the integral along with the statistical error bar.
-    """
+    """Importance sampling estimate."""
 
     if samples <= 0:
-        raise ValueError("samples must be a positive integer")
+        raise ValueError("samples must be positive")
     if rng is None:
         rng = random.Random()
-
-    evaluations: List[float] = []
+    values: List[float] = []
     for _ in range(samples):
         point = sampler(rng)
-        evaluations.append(weight(point) * func(point))
-
-    mean = sum(evaluations) / samples
-    variance = sum((value - mean) ** 2 for value in evaluations) / (samples - 1 if samples > 1 else 1)
+        values.append(weight(point) * func(point))
+    mean = sum(values) / samples
+    if samples > 1:
+        variance = sum((value - mean) ** 2 for value in values) / (samples - 1)
+    else:
+        variance = 0.0
     error = math.sqrt(variance / samples)
     return MonteCarloResult(value=mean, error=error, samples=samples)
 
@@ -108,25 +91,25 @@ def breit_wigner_sampler(
     *,
     rho_bounds: Tuple[float, float] | None = None,
 ) -> Callable[[random.Random], Tuple[float]]:
-    """Return a sampler that draws ``m^2`` values using the Breit–Wigner mapping."""
+    """Sampler for the Breit–Wigner change of variables."""
 
-    if width <= 0:
+    if width <= 0.0:
         raise ValueError("width must be positive")
-    if mass <= 0:
+    if mass <= 0.0:
         raise ValueError("mass must be positive")
-
     if rho_bounds is None:
-        rho_min, rho_max = -math.pi / 2.0, math.pi / 2.0
+        rho_min = -math.pi / 2.0
+        rho_max = math.pi / 2.0
     else:
         rho_min, rho_max = rho_bounds
     if rho_max <= rho_min:
-        raise ValueError("rho_bounds must satisfy rho_max > rho_min")
+        raise ValueError("rho_max must exceed rho_min")
     scale = width * mass
 
     def _sampler(rng: random.Random) -> Tuple[float]:
         rho = rng.uniform(rho_min, rho_max)
-        m_squared = mass**2 + scale * math.tan(rho)
-        return (m_squared,)
+        value = mass * mass + scale * math.tan(rho)
+        return (value,)
 
     return _sampler
 
@@ -137,40 +120,37 @@ def breit_wigner_weight(
     *,
     rho_bounds: Tuple[float, float] | None = None,
 ) -> Callable[[Point], float]:
-    """Weight factor corresponding to :func:`breit_wigner_sampler`.
+    """Weight for :func:`breit_wigner_sampler`."""
 
-    The sampler draws points by choosing :math:`\rho \in [\rho_{\min}, \rho_{\max}]`
-    uniformly and mapping it to ``m^2 = M\Gamma \tan \rho + M^2``.  The associated
-    probability density in ``m^2`` therefore reads
-
-    .. math::
-
-        g(m^2) = \frac{1}{\rho_{\max} - \rho_{\min}} \frac{M\Gamma}{(m^2 - M^2)^2 + M^2\Gamma^2}.
-
-    The returned callable evaluates ``1 / g(m^2)`` so that
-    :func:`importance_sampling` can compute ``f(m^2) / g(m^2)``.
-    """
-
-    if width <= 0:
+    if width <= 0.0:
         raise ValueError("width must be positive")
-    if mass <= 0:
+    if mass <= 0.0:
         raise ValueError("mass must be positive")
-
     if rho_bounds is None:
-        rho_min, rho_max = -math.pi / 2.0, math.pi / 2.0
+        rho_min = -math.pi / 2.0
+        rho_max = math.pi / 2.0
     else:
         rho_min, rho_max = rho_bounds
     if rho_max <= rho_min:
-        raise ValueError("rho_bounds must satisfy rho_max > rho_min")
-
+        raise ValueError("rho_max must exceed rho_min")
     rho_range = rho_max - rho_min
     scale = width * mass
 
     def _weight(point: Point) -> float:
         (m_squared,) = point
-        denominator = (m_squared - mass**2) ** 2 + scale**2
-        proposal_density = (scale / denominator) / rho_range
-        return 1.0 / proposal_density
+        denominator = (m_squared - mass * mass) ** 2 + scale * scale
+        proposal = (scale / denominator) / rho_range
+        if proposal <= 0.0:
+            raise ValueError("proposal density must stay positive")
+        return 1.0 / proposal
 
     return _weight
 
+
+__all__ = [
+    "MonteCarloResult",
+    "breit_wigner_sampler",
+    "breit_wigner_weight",
+    "importance_sampling",
+    "monte_carlo_integrate",
+]
