@@ -1,61 +1,58 @@
-"""Numerical integrators for ordinary differential equations.
-
-The module implements a small collection of explicit schemes that are useful in the
-PH121 numerical integration assignment:
-
-* :func:`forward_euler` – first order explicit Euler integrator for general first-order systems.
-* :func:`runge_kutta4` – classic fourth-order Runge–Kutta scheme.
-* :func:`velocity_verlet` – symplectic velocity Verlet scheme for second-order systems.
-
-All routines operate on callables that return the time-derivative of the state.  The
-state is represented as a tuple of floating point numbers, keeping dependencies to the
-Python standard library only.  This makes the helpers easy to reuse in environments
-where third-party libraries such as NumPy are not available.
-"""
+"""Simple ODE solvers used in the PH121 assignments."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, List, Sequence, Tuple
+from typing import Callable, Iterable, List, Sequence, Tuple
 
 State = Tuple[float, ...]
-DerivativeFunc = Callable[[float, State], Sequence[float]]
-AccelerationFunc = Callable[[float, State], Sequence[float]]
+DerivativeFunc = Callable[[float, Sequence[float]], Sequence[float]]
+AccelerationFunc = Callable[[float, Sequence[float]], Sequence[float]]
 
 
 @dataclass
 class IntegrationResult:
-    """Container holding the sampled time points and system states."""
+    """Hold the sampled times and states."""
 
     times: Tuple[float, ...]
     states: Tuple[State, ...]
 
     def as_lists(self) -> Tuple[List[float], List[List[float]]]:
-        """Return copies of the time and state arrays as mutable lists."""
+        times_list: List[float] = []
+        for value in self.times:
+            times_list.append(value)
+        states_list: List[List[float]] = []
+        for state in self.states:
+            copy: List[float] = []
+            for component in state:
+                copy.append(component)
+            states_list.append(copy)
+        return times_list, states_list
 
-        return list(self.times), [list(state) for state in self.states]
+
+def _to_state(values: Iterable[float]) -> State:
+    parts: List[float] = []
+    for entry in values:
+        parts.append(float(entry))
+    return tuple(parts)
 
 
-def _ensure_state(state: Sequence[float]) -> State:
-    """Convert *state* into an immutable :class:`State` tuple."""
-
-    return tuple(float(component) for component in state)
-
-
-def _advance_time_grid(t0: float, t_end: float, h: float) -> Tuple[float, ...]:
-    if h <= 0:
-        raise ValueError("Step size h must be positive.")
+def _time_grid(t0: float, t_end: float, step: float) -> Tuple[float, ...]:
+    if step <= 0.0:
+        raise ValueError("step must be positive")
     if t_end < t0:
-        raise ValueError("t_end must be greater than or equal to t0.")
-
-    times: List[float] = []
-    t = t0
-    while t < t_end:
-        times.append(t)
-        t = min(t_end, t + h)
-    if not times or times[-1] != t_end:
-        times.append(t_end)
-    return tuple(times)
+        raise ValueError("t_end must be >= t0")
+    points: List[float] = []
+    current = float(t0)
+    while current < t_end:
+        points.append(current)
+        next_value = current + step
+        if next_value > t_end:
+            next_value = t_end
+        current = next_value
+    if not points or points[-1] != t_end:
+        points.append(t_end)
+    return tuple(points)
 
 
 def forward_euler(
@@ -66,38 +63,22 @@ def forward_euler(
     t_end: float,
     step: float,
 ) -> IntegrationResult:
-    """Integrate a system of first-order equations using the forward Euler method.
+    """Plain Euler integration."""
 
-    Parameters
-    ----------
-    derivative:
-        Callable returning ``dy/dt`` given ``(t, y)``.
-    initial_state:
-        Iterable of floats describing the starting state ``y(t0)``.
-    t0, t_end:
-        Start and end times of the integration interval.
-    step:
-        Positive step size ``h``.
-
-    Returns
-    -------
-    IntegrationResult
-        Sampled time points (including ``t_end``) and states.
-    """
-
-    times = _advance_time_grid(t0, t_end, step)
-    states: List[State] = [_ensure_state(initial_state)]
-
-    for idx, t in enumerate(times[:-1]):
-        dt = times[idx + 1] - t
-        state = states[idx]
+    times = _time_grid(t0, t_end, step)
+    states: List[State] = []
+    states.append(_to_state(initial_state))
+    index = 0
+    while index < len(times) - 1:
+        t = times[index]
+        dt = times[index + 1] - t
+        state = states[index]
         slope = derivative(t, state)
-        next_state = _ensure_state(
-            component + dt * float(ds_dt)
-            for component, ds_dt in zip(state, slope)
-        )
-        states.append(next_state)
-
+        updated: List[float] = []
+        for value, rate in zip(state, slope):
+            updated.append(value + dt * float(rate))
+        states.append(_to_state(updated))
+        index += 1
     return IntegrationResult(times=times, states=tuple(states))
 
 
@@ -109,30 +90,38 @@ def runge_kutta4(
     t_end: float,
     step: float,
 ) -> IntegrationResult:
-    """Integrate a system with the classic fourth-order Runge–Kutta scheme."""
+    """Classic fourth order RK integrator."""
 
-    times = _advance_time_grid(t0, t_end, step)
-    states: List[State] = [_ensure_state(initial_state)]
-
-    for idx, t in enumerate(times[:-1]):
-        h = times[idx + 1] - t
-        y = states[idx]
+    times = _time_grid(t0, t_end, step)
+    states: List[State] = []
+    states.append(_to_state(initial_state))
+    index = 0
+    while index < len(times) - 1:
+        t = times[index]
+        h = times[index + 1] - t
+        y = states[index]
         k1 = tuple(float(value) for value in derivative(t, y))
-        y_k2 = _ensure_state(component + 0.5 * h * value for component, value in zip(y, k1))
+        mid1: List[float] = []
+        for value, slope in zip(y, k1):
+            mid1.append(value + 0.5 * h * slope)
+        y_k2 = _to_state(mid1)
         k2 = tuple(float(value) for value in derivative(t + 0.5 * h, y_k2))
-        y_k3 = _ensure_state(component + 0.5 * h * value for component, value in zip(y, k2))
+        mid2: List[float] = []
+        for value, slope in zip(y, k2):
+            mid2.append(value + 0.5 * h * slope)
+        y_k3 = _to_state(mid2)
         k3 = tuple(float(value) for value in derivative(t + 0.5 * h, y_k3))
-        y_k4 = _ensure_state(component + h * value for component, value in zip(y, k3))
+        mid3: List[float] = []
+        for value, slope in zip(y, k3):
+            mid3.append(value + h * slope)
+        y_k4 = _to_state(mid3)
         k4 = tuple(float(value) for value in derivative(t + h, y_k4))
-
-        next_state = _ensure_state(
-            component
-            + (h / 6.0)
-            * (k1_i + 2.0 * k2_i + 2.0 * k3_i + k4_i)
-            for component, k1_i, k2_i, k3_i, k4_i in zip(y, k1, k2, k3, k4)
-        )
-        states.append(next_state)
-
+        combined: List[float] = []
+        for value, a, b, c, d in zip(y, k1, k2, k3, k4):
+            piece = a + 2.0 * b + 2.0 * c + d
+            combined.append(value + (h / 6.0) * piece)
+        states.append(_to_state(combined))
+        index += 1
     return IntegrationResult(times=times, states=tuple(states))
 
 
@@ -145,33 +134,40 @@ def velocity_verlet(
     t_end: float,
     step: float,
 ) -> IntegrationResult:
-    """Integrate a Newtonian system using the velocity Verlet scheme.
+    """Velocity Verlet stepper."""
 
-    The acceleration callable should return the second derivative of the position with
-    respect to time, i.e. :math:`\ddot{y} = F(t, y)`.
-
-    Returns an :class:`IntegrationResult` whose states contain the concatenated
-    ``(position, velocity)`` vectors.
-    """
-
-    times = _advance_time_grid(t0, t_end, step)
-    position = _ensure_state(initial_position)
-    velocity = _ensure_state(initial_velocity)
+    times = _time_grid(t0, t_end, step)
+    position = _to_state(initial_position)
+    velocity = _to_state(initial_velocity)
     acc = tuple(float(value) for value in acceleration(t0, position))
-
-    states: List[State] = [position + velocity]
-
-    for idx, t in enumerate(times[:-1]):
-        h = times[idx + 1] - t
-        velocity_half = _ensure_state(v_i + 0.5 * h * a_i for v_i, a_i in zip(velocity, acc))
-        position = _ensure_state(p_i + h * v_half for p_i, v_half in zip(position, velocity_half))
+    states: List[State] = []
+    states.append(position + velocity)
+    index = 0
+    while index < len(times) - 1:
+        t = times[index]
+        h = times[index + 1] - t
+        half_step: List[float] = []
+        for vel, a in zip(velocity, acc):
+            half_step.append(vel + 0.5 * h * a)
+        velocity_half = _to_state(half_step)
+        new_pos_parts: List[float] = []
+        for pos, vel_half in zip(position, velocity_half):
+            new_pos_parts.append(pos + h * vel_half)
+        position = _to_state(new_pos_parts)
         next_acc = tuple(float(value) for value in acceleration(t + h, position))
-        velocity = _ensure_state(
-            v_half + 0.5 * h * a_i
-            for v_half, a_i in zip(velocity_half, next_acc)
-        )
+        new_vel_parts: List[float] = []
+        for vel_half, a in zip(velocity_half, next_acc):
+            new_vel_parts.append(vel_half + 0.5 * h * a)
+        velocity = _to_state(new_vel_parts)
         acc = next_acc
         states.append(position + velocity)
-
+        index += 1
     return IntegrationResult(times=times, states=tuple(states))
 
+
+__all__ = [
+    "IntegrationResult",
+    "forward_euler",
+    "runge_kutta4",
+    "velocity_verlet",
+]
