@@ -3,11 +3,16 @@
 from .integrators import forward_euler, runge_kutta4, velocity_verlet
 from .chaos import (
     BoxCountingEstimate,
+    InformationDimensionEstimate,
     LyapunovEstimate,
+    LyapunovSpectrumEstimate,
     estimate_lorenz_box_counting_dimension,
+    estimate_lorenz_information_dimension,
     estimate_lorenz_maximal_lyapunov,
+    estimate_lorenz_lyapunov_spectrum,
     format_estimates,
     lorenz63_derivative,
+    lorenz63_jacobian,
 )
 from .mercury import (
     PrecessionEstimate,
@@ -28,11 +33,16 @@ __all__ = [
     "runge_kutta4",
     "velocity_verlet",
     "BoxCountingEstimate",
+    "InformationDimensionEstimate",
     "LyapunovEstimate",
+    "LyapunovSpectrumEstimate",
     "estimate_lorenz_box_counting_dimension",
+    "estimate_lorenz_information_dimension",
     "estimate_lorenz_maximal_lyapunov",
+    "estimate_lorenz_lyapunov_spectrum",
     "format_estimates",
     "lorenz63_derivative",
+    "lorenz63_jacobian",
     "PrecessionEstimate",
     "estimate_precession",
     "integrate_mercury_orbit",

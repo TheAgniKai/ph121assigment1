@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from math import ceil, floor, log, sqrt
 from random import Random
 from statistics import mean, stdev
-from typing import Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 from .integrators import IntegrationResult, runge_kutta4
 
@@ -41,6 +41,19 @@ def lorenz63_derivative(
 
     x, y, z = state
     return sigma * (y - x), x * (rho - z) - y, x * y - beta * z
+
+
+def lorenz63_jacobian(
+    state: Tuple[float, float, float], *, sigma: float = 10.0, rho: float = 28.0, beta: float = 8.0 / 3.0
+) -> Tuple[Tuple[float, float, float], ...]:
+    """Return the Jacobian matrix of the Lorenz '63 flow at ``state``."""
+
+    x, y, z = state
+    return (
+        (-sigma, sigma, 0.0),
+        (rho - z, -1.0, -x),
+        (y, x, -beta),
+    )
 
 
 # --- Utilities -------------------------------------------------------------------
@@ -76,6 +89,14 @@ def _vector_scale(vector: Sequence[float], factor: float) -> Tuple[float, ...]:
 
 def _vector_norm(vector: Sequence[float]) -> float:
     return sqrt(sum(component * component for component in vector))
+
+
+def _vector_dot(a: Sequence[float], b: Sequence[float]) -> float:
+    return sum(x * y for x, y in zip(a, b))
+
+
+def _matrix_vector_product(matrix: Sequence[Sequence[float]], vector: Sequence[float]) -> Tuple[float, ...]:
+    return tuple(_vector_dot(row, vector) for row in matrix)
 
 
 def _linear_regression_slope(points: Iterable[Tuple[float, float]]) -> float:
@@ -122,6 +143,22 @@ class BoxCountingEstimate:
 
     epsilon: float
     box_count: int
+
+
+@dataclass(frozen=True)
+class LyapunovSpectrumEstimate:
+    """Summary of the full Lyapunov spectrum and Kaplan–Yorke dimension."""
+
+    exponents: Tuple[float, ...]
+    kaplan_yorke_dimension: float
+
+
+@dataclass(frozen=True)
+class InformationDimensionEstimate:
+    """Shannon entropy accumulated for a given ``ϵ`` scale."""
+
+    epsilon: float
+    entropy: float
 
 
 def _filter_growth_region(
@@ -348,6 +385,137 @@ def _count_visited_boxes(
     return len(visited)
 
 
+def _box_histogram(
+    states: Sequence[Sequence[float]],
+    epsilon: float,
+    minima: Sequence[float],
+    maxima: Sequence[float],
+) -> Dict[Tuple[int, ...], int]:
+    """Return a histogram counting the visits to each ``ϵ``-box."""
+
+    if epsilon <= 0.0:
+        raise ValueError("epsilon must be positive when building a histogram.")
+
+    dimensions = len(minima)
+    bins_per_axis = []
+    for min_value, max_value in zip(minima, maxima):
+        span = max_value - min_value
+        if span <= 0.0:
+            bins_per_axis.append(1)
+        else:
+            bins_per_axis.append(int(ceil(span / epsilon)) + 1)
+
+    histogram: Dict[Tuple[int, ...], int] = {}
+    for state in states:
+        indices = []
+        for axis, value in enumerate(state):
+            min_value = minima[axis]
+            bins = bins_per_axis[axis]
+            relative = (value - min_value) / epsilon
+            index = floor(relative + 1.0e-12)
+            if index < 0:
+                index = 0
+            elif index >= bins:
+                index = bins - 1
+            indices.append(index)
+        key = tuple(indices)
+        histogram[key] = histogram.get(key, 0) + 1
+
+    return histogram
+
+
+def _modified_gram_schmidt_with_norms(
+    vectors: Sequence[Sequence[float]],
+) -> Tuple[Tuple[float, ...], Tuple[float, ...]]:
+    """Return an orthonormal basis together with the norms removed in each step."""
+
+    orthonormal: List[Tuple[float, ...]] = []
+    norms: List[float] = []
+    for vector in vectors:
+        work = [float(component) for component in vector]
+        for basis_vector in orthonormal:
+            projection = _vector_dot(work, basis_vector)
+            for idx, basis_component in enumerate(basis_vector):
+                work[idx] -= projection * basis_component
+        norm = sqrt(sum(component * component for component in work))
+        if norm == 0.0:
+            raise ValueError("Encountered a linearly dependent set during Gram–Schmidt orthogonalisation.")
+        norms.append(norm)
+        orthonormal.append(tuple(component / norm for component in work))
+    return tuple(orthonormal), tuple(norms)
+
+
+def _advance_lorenz_and_tangent(
+    state: Sequence[float],
+    basis: Sequence[Sequence[float]],
+    step: float,
+    *,
+    sigma: float,
+    rho: float,
+    beta: float,
+) -> Tuple[Tuple[float, ...], Tuple[Tuple[float, ...], ...]]:
+    """Advance the Lorenz system and tangent basis by a single RK4 step."""
+
+    if step <= 0.0:
+        raise ValueError("Step size must be positive when advancing the Lorenz system.")
+
+    state = tuple(float(component) for component in state)
+    basis = tuple(tuple(float(component) for component in vector) for vector in basis)
+
+    # Stage 1
+    k1_state = lorenz63_derivative(0.0, state, sigma=sigma, rho=rho, beta=beta)
+    jac_state = lorenz63_jacobian(state, sigma=sigma, rho=rho, beta=beta)
+    k1_basis = tuple(_matrix_vector_product(jac_state, vector) for vector in basis)
+
+    # Stage 2
+    state_k2 = _vector_add(state, _vector_scale(k1_state, 0.5 * step))
+    jac_k2 = lorenz63_jacobian(state_k2, sigma=sigma, rho=rho, beta=beta)
+    basis_k2_input = tuple(
+        _vector_add(vector, _vector_scale(k1_vector, 0.5 * step))
+        for vector, k1_vector in zip(basis, k1_basis)
+    )
+    k2_state = lorenz63_derivative(0.0, state_k2, sigma=sigma, rho=rho, beta=beta)
+    k2_basis = tuple(_matrix_vector_product(jac_k2, vector) for vector in basis_k2_input)
+
+    # Stage 3
+    state_k3 = _vector_add(state, _vector_scale(k2_state, 0.5 * step))
+    jac_k3 = lorenz63_jacobian(state_k3, sigma=sigma, rho=rho, beta=beta)
+    basis_k3_input = tuple(
+        _vector_add(vector, _vector_scale(k2_vector, 0.5 * step))
+        for vector, k2_vector in zip(basis, k2_basis)
+    )
+    k3_state = lorenz63_derivative(0.0, state_k3, sigma=sigma, rho=rho, beta=beta)
+    k3_basis = tuple(_matrix_vector_product(jac_k3, vector) for vector in basis_k3_input)
+
+    # Stage 4
+    state_k4 = _vector_add(state, _vector_scale(k3_state, step))
+    jac_k4 = lorenz63_jacobian(state_k4, sigma=sigma, rho=rho, beta=beta)
+    basis_k4_input = tuple(
+        _vector_add(vector, _vector_scale(k3_vector, step))
+        for vector, k3_vector in zip(basis, k3_basis)
+    )
+    k4_state = lorenz63_derivative(0.0, state_k4, sigma=sigma, rho=rho, beta=beta)
+    k4_basis = tuple(_matrix_vector_product(jac_k4, vector) for vector in basis_k4_input)
+
+    factor = step / 6.0
+    next_state = tuple(
+        component
+        + factor * (k1_i + 2.0 * k2_i + 2.0 * k3_i + k4_i)
+        for component, k1_i, k2_i, k3_i, k4_i in zip(state, k1_state, k2_state, k3_state, k4_state)
+    )
+
+    next_basis = tuple(
+        tuple(
+            component
+            + factor * (k1_i + 2.0 * k2_i + 2.0 * k3_i + k4_i)
+            for component, k1_i, k2_i, k3_i, k4_i in zip(vector, k1_vector, k2_vector, k3_vector, k4_vector)
+        )
+        for vector, k1_vector, k2_vector, k3_vector, k4_vector in zip(basis, k1_basis, k2_basis, k3_basis, k4_basis)
+    )
+
+    return next_state, next_basis
+
+
 def estimate_lorenz_box_counting_dimension(
     epsilons: Sequence[float],
     *,
@@ -408,6 +576,134 @@ def estimate_lorenz_box_counting_dimension(
     dimension = _linear_regression_slope(regression_points)
 
     return estimates, dimension
+
+
+def estimate_lorenz_information_dimension(
+    epsilons: Sequence[float],
+    *,
+    warmup_time: float = 20.0,
+    sample_time: float = 60.0,
+    step: float = 0.01,
+    initial_state: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    finest_average: int = 1,
+) -> Tuple[List[InformationDimensionEstimate], float]:
+    """Estimate the information dimension ``D₁`` of the Lorenz attractor."""
+
+    epsilons = list(epsilons)
+    if len(epsilons) < 2:
+        raise ValueError("At least two epsilon values are required to estimate the information dimension.")
+    if any(epsilon <= 0.0 for epsilon in epsilons):
+        raise ValueError("All epsilon values must be positive when estimating the information dimension.")
+    if sample_time <= 0.0:
+        raise ValueError("sample_time must be positive when estimating the information dimension.")
+    if finest_average <= 0:
+        raise ValueError("finest_average must be positive when estimating the information dimension.")
+
+    warmup = _integrate_lorenz(initial_state, t_end=warmup_time, step=step)
+    sample = _integrate_lorenz(warmup.states[-1], t_end=sample_time, step=step)
+
+    minima, maxima = _bounding_box(sample.states)
+
+    sorted_epsilons = sorted(epsilons)
+    estimates: List[InformationDimensionEstimate] = []
+    total_points = len(sample.states)
+    if total_points == 0:
+        raise ValueError("Sampling produced no states for the information dimension estimate.")
+
+    dimension_candidates: List[Tuple[float, float]] = []
+    for epsilon in sorted_epsilons:
+        histogram = _box_histogram(sample.states, epsilon, minima, maxima)
+        entropy = 0.0
+        for count in histogram.values():
+            probability = count / total_points
+            if probability > 0.0:
+                entropy -= probability * log(probability)
+        estimates.append(InformationDimensionEstimate(epsilon=epsilon, entropy=entropy))
+        scale = abs(log(epsilon))
+        if scale > 0.0:
+            dimension_candidates.append((epsilon, entropy / scale))
+
+    if not dimension_candidates:
+        raise RuntimeError("Unable to compute any information-dimension candidates.")
+
+    fine_scale_values = [value for epsilon, value in dimension_candidates if epsilon < 1.0]
+    if len(fine_scale_values) < finest_average:
+        fine_scale_values = [value for _, value in dimension_candidates]
+
+    selected = sorted(fine_scale_values)[: min(finest_average, len(fine_scale_values))]
+    dimension = sum(selected) / len(selected)
+
+    return estimates, dimension
+
+
+def estimate_lorenz_lyapunov_spectrum(
+    *,
+    warmup_time: float = 20.0,
+    sample_time: float = 60.0,
+    step: float = 0.01,
+    initial_state: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    sigma: float = 10.0,
+    rho: float = 28.0,
+    beta: float = 8.0 / 3.0,
+) -> LyapunovSpectrumEstimate:
+    """Estimate the full Lyapunov spectrum and Kaplan–Yorke dimension."""
+
+    if sample_time <= 0.0:
+        raise ValueError("sample_time must be positive when estimating the Lyapunov spectrum.")
+    if step <= 0.0:
+        raise ValueError("step must be positive when estimating the Lyapunov spectrum.")
+
+    warmup = _integrate_lorenz(initial_state, t_end=warmup_time, step=step)
+    state = warmup.states[-1]
+
+    basis = []
+    dimension = len(state)
+    for idx in range(dimension):
+        vector = [0.0] * dimension
+        vector[idx] = 1.0
+        basis.append(tuple(vector))
+
+    exponent_sums = [0.0] * dimension
+    elapsed = 0.0
+
+    while elapsed < sample_time - 1.0e-12:
+        h = min(step, sample_time - elapsed)
+        state, propagated_basis = _advance_lorenz_and_tangent(state, basis, h, sigma=sigma, rho=rho, beta=beta)
+        orthonormal_basis, norms = _modified_gram_schmidt_with_norms(propagated_basis)
+        for idx, norm in enumerate(norms):
+            exponent_sums[idx] += log(norm)
+        basis = list(orthonormal_basis)
+        elapsed += h
+
+    if elapsed == 0.0:
+        raise ValueError("No time elapsed during the Lyapunov spectrum estimate.")
+
+    exponents = tuple(sum_value / elapsed for sum_value in exponent_sums)
+
+    cumulative = 0.0
+    k_index = -1
+    partial_sums: List[float] = []
+    for idx, exponent in enumerate(exponents):
+        cumulative += exponent
+        partial_sums.append(cumulative)
+        if cumulative > 0.0:
+            k_index = idx
+        else:
+            break
+
+    if k_index == -1:
+        kaplan_yorke_dimension = 0.0
+    elif k_index + 1 >= len(exponents):
+        kaplan_yorke_dimension = float(len(exponents))
+    else:
+        numerator = partial_sums[k_index]
+        next_exponent = exponents[k_index + 1]
+        if next_exponent == 0.0:
+            kaplan_yorke_dimension = float(k_index + 1)
+        else:
+            kaplan_yorke_dimension = (k_index + 1) + numerator / abs(next_exponent)
+
+    return LyapunovSpectrumEstimate(exponents=exponents, kaplan_yorke_dimension=kaplan_yorke_dimension)
 
 
 def main() -> None:  # pragma: no cover - convenience entry point for manual runs
