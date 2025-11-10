@@ -13,11 +13,13 @@ Point = Tuple[Number, ...]
 
 @dataclass
 class MonteCarloResult:
-    """Store value, error, and sample count."""
+    """Store value, error, sample count, and optional sample traces."""
 
     value: float
     error: float
     samples: int
+    raw_samples: Tuple[float, ...] | None = None
+    weighted_samples: Tuple[float, ...] | None = None
 
 
 def monte_carlo_integrate(
@@ -55,7 +57,14 @@ def monte_carlo_integrate(
     else:
         variance = 0.0
     error = math.sqrt(variance / samples)
-    return MonteCarloResult(value=volume * mean, error=volume * error, samples=samples)
+    weighted_values = tuple(volume * value for value in values)
+    return MonteCarloResult(
+        value=volume * mean,
+        error=volume * error,
+        samples=samples,
+        raw_samples=tuple(values),
+        weighted_samples=weighted_values,
+    )
 
 
 def importance_sampling(
@@ -72,17 +81,27 @@ def importance_sampling(
         raise ValueError("samples must be positive")
     if rng is None:
         rng = random.Random()
-    values: List[float] = []
+    raw_values: List[float] = []
+    contributions: List[float] = []
     for _ in range(samples):
         point = sampler(rng)
-        values.append(weight(point) * func(point))
-    mean = sum(values) / samples
+        raw = func(point)
+        weighted = weight(point) * raw
+        raw_values.append(raw)
+        contributions.append(weighted)
+    mean = sum(contributions) / samples
     if samples > 1:
-        variance = sum((value - mean) ** 2 for value in values) / (samples - 1)
+        variance = sum((value - mean) ** 2 for value in contributions) / (samples - 1)
     else:
         variance = 0.0
     error = math.sqrt(variance / samples)
-    return MonteCarloResult(value=mean, error=error, samples=samples)
+    return MonteCarloResult(
+        value=mean,
+        error=error,
+        samples=samples,
+        raw_samples=tuple(raw_values),
+        weighted_samples=tuple(contributions),
+    )
 
 
 def breit_wigner_sampler(
