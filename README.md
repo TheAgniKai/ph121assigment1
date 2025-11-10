@@ -17,6 +17,18 @@ Utilities for solving systems of ordinary differential equations.
 All functions return an `IntegrationResult` dataclass containing the sampled times and states. The
 states are stored as tuples and can be converted to lists via `result.as_lists()`.
 
+### `ph121.mercury`
+
+Numerical helpers for simulating Mercury's orbit with the leading-order general relativity
+correction.
+
+* `integrate_mercury_orbit(duration, step, *, relativistic)` – evolve the orbit and return the
+  radial, angular, and energy time series.
+* `estimate_precession(duration_years=100.0, step_days=0.25)` – compare relativistic and
+  Newtonian integrations to estimate the perihelion advance in arcseconds per century.
+* `plot_conserved_quantities(result)` – visualise the fractional drift of the energy and angular
+  momentum for a simulation.
+
 ### `ph121.monte_carlo`
 
 Monte Carlo integration utilities covering uniform sampling, general importance sampling, and a
