@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
 from .chaos import (
@@ -253,9 +255,42 @@ def format_report(report: AssignmentReport) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:  # pragma: no cover
+def main(argv: Sequence[str] | None = None) -> None:  # pragma: no cover
+    parser = argparse.ArgumentParser(description="Run all PH121 assignment simulations")
+    parser.add_argument(
+        "--no-figures",
+        action="store_true",
+        help="skip matplotlib figure generation",
+    )
+    parser.add_argument(
+        "--figures",
+        default="figures",
+        help="output directory for generated figures (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--show-figures",
+        action="store_true",
+        help="display figures interactively after saving",
+    )
+    args = parser.parse_args([] if argv is None else list(argv))
+
     report = generate_report()
     print(format_report(report))
+
+    if not args.no_figures:
+        from .visuals import FigureGenerationError, create_assignment_figures
+
+        try:
+            figures = create_assignment_figures(
+                report,
+                args.figures,
+                show=args.show_figures,
+            )
+        except FigureGenerationError as exc:
+            print(f"\n[warning] Could not generate figures: {exc}")
+        else:
+            output_dir = Path(args.figures).resolve()
+            print(f"\nGenerated {len(figures)} figures in {output_dir}")
 
 
 __all__ = [

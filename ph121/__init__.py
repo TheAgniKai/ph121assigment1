@@ -41,6 +41,7 @@ from .report import (
     format_report,
     generate_report,
 )
+from .visuals import FigureGenerationError, SavedFigure, create_assignment_figures
 from .high_energy import (
     DifferentialHistogram,
     MASS_Z,
@@ -59,6 +60,7 @@ __all__ = [
     "BetaParameters",
     "BoxCountingEstimate",
     "DifferentialHistogram",
+    "FigureGenerationError",
     "InformationDimensionEstimate",
     "IntegrationResult",
     "ChaosReport",
@@ -69,6 +71,7 @@ __all__ = [
     "MercuryOrbitResult",
     "MonteCarloSummary",
     "MonteCarloResult",
+    "SavedFigure",
     "PartonDistribution",
     "PrecessionEstimate",
     "WIDTH_Z",
@@ -78,6 +81,7 @@ __all__ = [
     "differential_cross_section_electron_muon",
     "drell_yan_differential_cross_section",
     "drell_yan_total_cross_section",
+    "create_assignment_figures",
     "estimate_lorenz_box_counting_dimension",
     "estimate_lorenz_information_dimension",
     "estimate_lorenz_maximal_lyapunov",
